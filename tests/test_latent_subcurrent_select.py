@@ -1,11 +1,15 @@
 """Subcurrent selection: approved pool only, exact drive_tag, no silent river."""
 
+from datetime import datetime, timedelta
+
 import pytest
 
 pytest.importorskip("mcp.server.fastmcp")
 
 from server import (
+    _approved_latent_note_payload,
     _latent_low_stock_drives,
+    _latent_note_is_stale,
     _latent_select_weight,
     _select_approved_latent_note,
 )
@@ -19,15 +23,18 @@ def _note(
     *,
     pinned: bool = False,
     delivered_count: int = 0,
+    note_type: str = "inward",
+    source_created: str = "",
 ) -> dict:
     return {
         "id": note_id,
         "status": status,
         "pinned": pinned,
-        "note_type": "inward",
+        "note_type": note_type,
         "drive_tag": drive_tag,
         "dream_line": line,
-        "created_at": "2026-07-19T00:00:00",
+        "source_created": source_created,
+        "created_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"),
         "delivered_count": delivered_count,
     }
 
@@ -90,6 +97,57 @@ def test_draft_notes_never_deliver(monkeypatch):
 
     hit = _select_approved_latent_note(set(), drive_key="stewardship")
     assert hit["line"] == "已确认的修屋。"
+
+
+def test_stale_outward_note_with_live_wording_is_not_delivered(monkeypatch):
+    old_day = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%d")
+    data = {
+        "notes": [
+            _note(
+                "old-news",
+                "curiosity",
+                "昨晚刚爆的模型消息，还挂在这里。",
+                note_type="outward",
+                source_created=old_day,
+            ),
+            _note(
+                "timeless",
+                "curiosity",
+                "章鱼的腕足怎样分配局部决策？",
+                note_type="outward",
+                source_created=old_day,
+            ),
+        ]
+    }
+    monkeypatch.setattr("server._load_latent_notes", lambda: data)
+
+    assert _latent_note_is_stale(data["notes"][0]) is True
+    assert _latent_note_is_stale(data["notes"][1]) is False
+    picks = {_select_approved_latent_note(set(), drive_key="curiosity")["note_id"] for _ in range(12)}
+    assert picks == {"timeless"}
+
+
+def test_recent_outward_note_keeps_source_provenance():
+    source_day = datetime.utcnow().strftime("%Y-%m-%d")
+    note = _note(
+        "fresh-news",
+        "curiosity",
+        "昨晚刚发布的系统卡还有一处没看懂。",
+        note_type="outward",
+        source_created=source_day,
+    )
+    note.update({
+        "source_kind": "window",
+        "source_title": "系统卡",
+        "source_bucket_id": "bucket-1",
+    })
+
+    assert _latent_note_is_stale(note) is False
+    payload = _approved_latent_note_payload(note)
+    assert payload["source_created"] == source_day
+    assert payload["source_kind"] == "window"
+    assert payload["source_title"] == "系统卡"
+    assert payload["created_at"] == note["created_at"]
 
 
 def test_pinned_is_reusable_not_vip_weight():

@@ -1455,6 +1455,45 @@ def _latent_note_line(note: dict) -> str:
     return " ".join(str(note.get("dream_line") or note.get("line") or "").split())
 
 
+_LATENT_FRESHNESS_SHORT_MARKERS = (
+    "昨晚", "昨天", "昨日", "今天", "今日", "今早", "今晚", "明天",
+    "刚刚", "刚爆", "刚发生", "刚发布", "刚上线", "刚更新",
+)
+_LATENT_FRESHNESS_MEDIUM_MARKERS = (
+    "最新消息", "最新进展", "本周", "这周", "最近刚", "日前",
+)
+
+
+def _latent_note_freshness_days(note: dict) -> int | None:
+    """Return the maximum source age for wording that claims to be recent."""
+    if _normalize_latent_note_type(note.get("note_type")) != "outward":
+        return None
+    line = _latent_note_line(note)
+    if any(marker in line for marker in _LATENT_FRESHNESS_SHORT_MARKERS):
+        return 3
+    if any(marker in line for marker in _LATENT_FRESHNESS_MEDIUM_MARKERS):
+        return 14
+    return None
+
+
+def _latent_note_is_stale(note: dict, now: datetime | None = None) -> bool:
+    """Keep old reflections, but reject old outward notes that impersonate live news."""
+    max_age_days = _latent_note_freshness_days(note)
+    if max_age_days is None:
+        return False
+    source_dt = _latent_note_dt(note.get("source_created"))
+    if source_dt is None:
+        source_dt = _latent_note_dt(note.get("created_at"))
+    if source_dt is None:
+        return False
+    now = now or datetime.utcnow()
+    if source_dt.tzinfo is not None:
+        source_dt = source_dt.replace(tzinfo=None)
+    if now.tzinfo is not None:
+        now = now.replace(tzinfo=None)
+    return now - source_dt > timedelta(days=max_age_days)
+
+
 def _find_latent_note(data: dict, note_id: str) -> dict | None:
     note_id = str(note_id or "").strip()
     if not note_id:
@@ -1486,6 +1525,9 @@ def _approved_latent_note_payload(note: dict) -> dict | None:
         "note_id": note_id,
         "bucket_id": note_id,
         "source_bucket_id": note.get("source_bucket_id", ""),
+        "source_kind": note.get("source_kind", ""),
+        "source_title": note.get("source_title", ""),
+        "source_created": note.get("source_created", ""),
         "theme": note.get("source_title") or note.get("source_kind") or "潜意识便签",
         "line": line,
         "anchor": note.get("source_fragment", ""),
@@ -1494,6 +1536,7 @@ def _approved_latent_note_payload(note: dict) -> dict | None:
         "last_delivered_at": str(note.get("last_delivered_at") or ""),
         "wander_mode": "memory",
         "query": line,
+        "created_at": note.get("created_at", ""),
         "created": note.get("created_at", ""),
         "score": 1.0,
     }
@@ -1504,6 +1547,8 @@ def _iter_approved_latent_payloads(data: dict, exclude_ids: set[str]) -> list[di
     out: list[dict] = []
     for note in data.get("notes", []):
         if note.get("status") != "approved":
+            continue
+        if _latent_note_is_stale(note):
             continue
         note_id = str(note.get("id") or "").strip()
         if not note_id or note_id in exclude_ids:
