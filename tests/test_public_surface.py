@@ -15,7 +15,13 @@ def test_complete_dashboard_is_bundled_without_household_layers():
 
 
 def test_removed_household_modules_stay_absent():
-    for name in ["catroom_store.py", "room_store.py", "rhythm_store.py", "opening.html"]:
+    for name in [
+        "catroom_store.py",
+        "room_store.py",
+        "rhythm_store.py",
+        "opening.html",
+        "reclassify_domains.py",
+    ]:
         assert not (ROOT / name).exists()
 
 

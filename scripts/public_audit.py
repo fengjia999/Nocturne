@@ -22,6 +22,7 @@ FORBIDDEN_TEXT = {
     "/Users/lili": "private absolute path",
     "toy.pyrus.uk": "private service URL",
     "Pyruslili/Ombre-Brain/main/docs/assets": "private artwork URL",
+    "婷易": "private personal name leftover",
 }
 SECRET_PATTERNS = {
     "OpenAI-style key": re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
