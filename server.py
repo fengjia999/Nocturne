@@ -99,7 +99,7 @@ from desire_engine import (
 )
 
 # MCP tool enums — keep in sync with desire_engine.DRIVE_KEYS / CHORD_KEYS.
-HoldKind = Literal["memory", "feel", "writing", "unresolved", "window"]
+HoldKind = Literal["memory", "feel", "writing", "unresolved", "window", "letter"]
 DriveKeyName = Literal[
     "attachment",
     "libido",
@@ -5384,6 +5384,9 @@ async def hold(
     kind: HoldKind = "memory",
     tags: str = "",
     importance: int = 5,
+    name: str = "",
+    pinned: bool = False,
+    protected: bool = False,
     chord: Optional[ChordName] = None,
     drive: Optional[DriveKeyName] = None,
     drives: Optional[list[DriveKeyName]] = None,
@@ -5393,8 +5396,10 @@ async def hold(
     strain: str = "",
     charge: str = "",
 ) -> str:
-    """写入长期沉淀。
-    kind：memory/feel/writing/unresolved/window。
+    """写入长期沉淀。正文按原样留下，不走脱水器。
+    kind：memory/feel/writing/unresolved/window/letter。
+    name：可选标题；不填就不起名，不会用模型自动起名。
+    pinned/protected：钉选或保护，importance 锁 10，不合并。
     drive：主驱动，九维枚举之一（attachment/libido/possessiveness/reflection/stewardship/curiosity/social/fatigue/stress）；强度默认 mid，勿填 signal 名。
     drives：副驱动列表，同九维枚举；不要重复 drive，后端会去重。
     chord：已知和弦枚举（C6/Am7/Gsus4/Dmaj7/Amaj7/Fmaj7/Fmaj7#11/Gmaj7/Dm7/Em7/F#dim/Bm7b5），不是 Drift/氛围词。
@@ -5407,12 +5412,15 @@ async def hold(
         return "内容为空，无法存储。"
 
     normalized_kind = (kind or "").strip().lower() or "memory"
-    valid_kinds = {"memory", "feel", "writing", "unresolved", "window"}
+    valid_kinds = {"memory", "feel", "writing", "unresolved", "window", "letter"}
     if normalized_kind not in valid_kinds:
-        return f"kind无效：{normalized_kind}。可用: memory/feel/writing/unresolved/window。念头请用 stir，不要用 hold。"
+        return f"kind无效：{normalized_kind}。可用: memory/feel/writing/unresolved/window/letter。念头请用 stir，不要用 hold。"
 
     importance = max(1, min(10, importance))
+    if pinned or protected:
+        importance = 10
     extra_tags = [t.strip() for t in tags.split(",") if t.strip()]
+    final_name = (name or "").strip() or None
     chord = _normalize_hold_chord(chord)
     drive_tags = _parse_hold_drive_tags(drive, drives)
     signal_hints = _explicit_signal_hints(
@@ -5429,12 +5437,14 @@ async def hold(
         bucket_id = await bucket_mgr.create(
             content=content,
             tags=extra_tags,
-            importance=5,
+            importance=importance,
             domain=[],
             valence=0.5,
             arousal=0.3,
-            name=_feel_title(content) or None,
+            name=final_name or _feel_title(content) or None,
             bucket_type="feel",
+            pinned=bool(pinned),
+            protected=bool(protected),
             chord=chord,
             signal_hints=signal_hints or None,
             drive_tags=drive_tags or None,
@@ -5447,74 +5457,36 @@ async def hold(
             suffix += f" pulse_engaged={engaged.get('via')}:{engaged.get('engaged')}"
         return f"🫧feel→{bucket_id}{suffix}"
 
-    # --- Step 1: auto-tagging / 自动打标 ---
-    try:
-        analysis = await dehydrator.analyze(content)
-    except Exception as e:
-        logger.warning(f"Auto-tagging failed, using defaults / 自动打标失败: {e}")
-        analysis = {
-            "domain": ["未分类"], "valence": 0.5, "arousal": 0.3,
-            "tags": [], "suggested_name": "",
-        }
-
+    # Live hold keeps the source words. Domain comes from kind, not Ombre auto-tag.
     kind_domain = [] if normalized_kind == "memory" else [normalized_kind]
-    final_domain = kind_domain if kind_domain else analysis["domain"]
-    auto_valence = analysis["valence"]
-    auto_arousal = analysis["arousal"]
-    auto_tags = analysis["tags"]
-    suggested_name = analysis.get("suggested_name", "")
+    final_domain = kind_domain or ["memory"]
 
-    final_valence = auto_valence
-    final_arousal = auto_arousal
-
-    all_tags = list(dict.fromkeys(auto_tags + extra_tags))
-
-    # --- Drawer kinds: skip merge, create directly ---
-    _DIRECT_DOMAINS = {"writing", "window", "unresolved"}
-    if kind_domain and set(kind_domain) & _DIRECT_DOMAINS:
-        bucket_id = await bucket_mgr.create(
-            content=content,
-            tags=all_tags,
-            importance=importance,
-            domain=final_domain,
-            valence=final_valence,
-            arousal=final_arousal,
-            name=suggested_name or None,
-            chord=chord,
-            signal_hints=signal_hints or None,
-            drive_tags=drive_tags or None,
-        )
-        asyncio.ensure_future(embedding_engine.generate_and_store(bucket_id, content))
-        engaged = _maybe_engage_pulse("hold")
-        suffix = f" pulse_engaged={engaged.get('via')}:{engaged.get('engaged')}" if engaged else ""
-        return f"新建→{bucket_id} {','.join(final_domain)}{suffix}"
-
-    # --- Step 2: merge or create / 合并或新建 ---
-    result_name, is_merged = await _merge_or_create(
+    bucket_id = await bucket_mgr.create(
         content=content,
-        tags=all_tags,
+        tags=extra_tags,
         importance=importance,
         domain=final_domain,
-        valence=final_valence,
-        arousal=final_arousal,
-        name=suggested_name,
+        valence=0.5,
+        arousal=0.3,
+        name=final_name,
+        pinned=bool(pinned),
+        protected=bool(protected),
         chord=chord,
         signal_hints=signal_hints or None,
         drive_tags=drive_tags or None,
     )
-
-    action = "合并→" if is_merged else "新建→"
+    asyncio.ensure_future(embedding_engine.generate_and_store(bucket_id, content))
     engaged = _maybe_engage_pulse("hold")
     suffix = f" pulse_engaged={engaged.get('via')}:{engaged.get('engaged')}" if engaged else ""
-    return f"{action}{result_name} {','.join(final_domain)}{suffix}"
+    return f"新建→{bucket_id} {','.join(final_domain)}{suffix}"
 
 
 # =============================================================
-# Tool 3: grow — Grow, fragments become memories
-# 工具 3：grow — 生长，一天的碎片长成记忆
+# grow — Ombre diary digest. Intentionally not an MCP tool.
+# grow 走 dehydrator.digest，会把原文压成干条目。活记忆循环用 hold。
 # =============================================================
 async def grow(content: str) -> str:
-    """日记归档,自动拆分为多桶。短内容(<30字)走快速路径。"""
+    """Ombre 日记拆分（不注册为 MCP）。会走脱水器，不建议在活记忆循环里调用。"""
     await decay_engine.ensure_started()
 
     if not content or not content.strip():

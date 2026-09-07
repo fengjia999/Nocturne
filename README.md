@@ -55,6 +55,7 @@ not that the continuity system is incomplete. After installation it provides:
 - source-preserving Markdown / YAML memory readable without Nocturne
 - MCP tools: `hold`, `breath`, `trace`, `wander`, `wander_mark`, `drive`,
   `undercurrent`, `trail_delta`, and `trail_family`
+  (`grow` exists in source as Ombre diary-digest leftover and is **not** an MCP tool)
 - selective Breath composition and continuity traces
 - Marginalia / Shape Trace, revision marks, and differential write-back
 - Drive Ledger, DP-derived drive events, and independent state dynamics
@@ -83,7 +84,7 @@ surfaces — or use the core without one.
 ## Requirements
 
 - **Python 3.11+** (3.12 recommended; matches CI)
-- optional OpenAI-compatible API key for semantic tagging / embeddings
+- optional OpenAI-compatible API key for embeddings / Nearfield
 
 ## Quick start
 
@@ -102,9 +103,27 @@ OMBRE_TRANSPORT=streamable-http python server.py
 open http://localhost:8000/dashboard
 ```
 
-Basic `hold` / `breath` / `trace` work without a model key (tagging falls back
-to defaults). Set `OMBRE_API_KEY` to enable model-assisted analysis,
-compression / dehydration, embeddings, and richer generative features.
+Basic `hold` / `breath` / `trace` work without a model key. `hold` stores the
+source words as written; it does not route live memory through the dehydrator.
+Set `OMBRE_API_KEY` to enable embeddings, optional Nearfield, and other
+model-assisted features.
+
+### Live loop vs dehydrator
+
+Nocturne's live loop is `hold` as written → `breath` / `wander` / `trace`.
+The Markdown bucket keeps the words you actually stored.
+
+`dehydrator.py` is inherited Ombre Brain machinery (compress, merge, auto-tag,
+diary digest). It is optional leftover, not the continuity path. Sending live
+holds through it flattens voice into dry summaries and Ombre topic labels.
+That is not how Nocturne keeps shape.
+
+`grow` is the Ombre diary-digest entry point. It is **intentionally not
+registered** as an MCP tool, because it calls `dehydrator.digest` and rewrites
+a day into chips. Do not add `@mcp.tool()` to it.
+
+If you want Ombre-style compression, you can still call dehydrator yourself.
+The default MCP surface will not.
 
 ### MCP via stdio
 
@@ -129,7 +148,7 @@ For HTTP clients, connect to `http://localhost:8000/mcp`.
 Memories are ordinary Markdown files with YAML frontmatter. SQLite / JSON
 sidecars hold embeddings and optional continuity layers. Basic storage and
 retrieval work without a model key; an OpenAI-compatible endpoint enables
-semantic analysis, compression, embeddings, and generative features.
+embeddings and optional generative features. Live `hold` does not dehydrate.
 
 See [`config.example.yaml`](config.example.yaml),
 [`ENV_VARS.md`](ENV_VARS.md), and

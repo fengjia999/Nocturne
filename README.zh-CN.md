@@ -42,6 +42,7 @@ Ombre Brain 仍是独立项目；两套系统目前拥有不同的范围与功�
 - 保留原始来源、无需 Nocturne 也能阅读的 Markdown / YAML 记忆存储
 - MCP 工具：`hold`、`breath`、`trace`、`wander`、`wander_mark`、`drive`、
   `undercurrent`、`trail_delta`、`trail_family`
+  （源码里的 `grow` 是 Ombre 日记拆分遗留，**不是** MCP 工具）
 - 选择性 Breath 组合与连续性 traces
 - Marginalia / Shape Trace、修订标记与差分写回
 - Drive Ledger、DP 衍生事件与独立状态动力学
@@ -61,7 +62,7 @@ Dashboard 中的 Breath、Reverie、Constellations、Echoes、Drift 与 Axis 等
 ## 环境要求
 
 - **Python 3.11+**（推荐 3.12，与 CI 一致）
-- 可选：OpenAI 兼容 API Key（语义打标 / 向量 / Nearfield 日更脱水）
+- 可选：OpenAI 兼容 API Key（向量 / Nearfield）
 
 ## 快速开始
 
@@ -80,8 +81,22 @@ OMBRE_TRANSPORT=streamable-http python server.py
 open http://localhost:8000/dashboard
 ```
 
-不配模型 Key 时，基础的 `hold` / `breath` / `trace` 仍可使用（打标会回落到默认值）。
-配置 `OMBRE_API_KEY` 后可启用模型辅助分析、压缩 / 脱水、向量与更丰富的生成能力。
+不配模型 Key 时，基础的 `hold` / `breath` / `trace` 仍可使用。`hold` 按原文写入，
+不把活记忆送进脱水器。配置 `OMBRE_API_KEY` 后可启用向量、可选 Nearfield 等模型辅助能力。
+
+### 活记忆循环 vs 脱水器
+
+Nocturne 的活循环是：`hold` 按原样留下 → `breath` / `wander` / `trace`。
+Markdown 桶里保存的就是当时写下的句子。
+
+`dehydrator.py` 是从 Ombre Brain 继承来的压缩 / 合并 / 自动打标 / 日记拆分机器。
+它是可选遗留，不是连续性主路。把活的 hold 送进去，声音会被压成干摘要，再打上
+Ombre 式主题域。那不是 Nocturne 保存形状的方式。
+
+`grow` 是 Ombre 日记拆分入口。它**有意不注册**为 MCP 工具，因为它会调用
+`dehydrator.digest`，把一天改写成碎片。不要给它加 `@mcp.tool()`。
+
+若你明确想要 Ombre 式压缩，可以自己调用 dehydrator。默认 MCP 面不会走它。
 
 ### 以 stdio 接入 MCP
 
@@ -104,7 +119,7 @@ HTTP 客户端请连接 `http://localhost:8000/mcp`。
 ## 存储与模型
 
 记忆是带 YAML frontmatter 的普通 Markdown 文件。SQLite / JSON 侧车保存向量与可选连续性层。
-基础写入与检索不依赖模型 Key；配置 OpenAI 兼容接口后，可启用语义分析、压缩、向量与生成能力。
+基础写入与检索不依赖模型 Key；配置 OpenAI 兼容接口后，可启用向量与可选生成能力。活的 `hold` 不走脱水。
 
 近期生活层见 [`docs/NEARFIELD.md`](docs/NEARFIELD.md)。它默认关闭；对话账本与生成日记应保存在仓库之外。
 
