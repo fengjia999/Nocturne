@@ -3130,6 +3130,21 @@ html[data-theme="sakura-milk"] ::selection { background: rgba(216,132,159,.28); 
     </div>
 
     <div class="config-section">
+      <h3>Memory Backup</h3>
+      <p class="section-note">导出整个记忆数据目录（记忆、近场日记、索引与状态）。备份包含私人内容，请妥善保存。</p>
+      <div style="display:flex;flex-wrap:wrap;gap:0.6rem;align-items:center;margin:0.8rem 0;">
+        <button type="button" class="btn-primary" onclick="downloadMemoryBackup()">导出完整备份 ZIP</button>
+        <span id="memory-backup-status" style="font-size:0.72rem;color:var(--mute);"></span>
+      </div>
+      <p class="section-note">导入会在<strong>下次重启 Nocturne 服务时替换现有记忆数据</strong>，不会合并。当前数据会在服务端保留一份恢复前副本。登录凭据和环境变量不随备份导入。</p>
+      <div class="config-row"><label for="memory-restore-file">选择 Nocturne 完整备份</label>
+        <input id="memory-restore-file" type="file" accept=".zip,application/zip">
+      </div>
+      <button type="button" id="memory-restore-btn" onclick="stageMemoryRestore()" style="margin-top:0.6rem;">校验并准备恢复</button>
+      <div id="memory-restore-status" role="status" style="margin-top:0.8rem;font-size:0.75rem;line-height:1.7;"></div>
+    </div>
+
+    <div class="config-section">
       <h3>Account</h3>
       <p class="section-note">离开这间私人档案室。</p>
       <button onclick="doLogout()" style="color:var(--negative);border-color:var(--negative);">Sign out</button>
@@ -4350,6 +4365,57 @@ async function changePassword() {
     const d = await resp.json();
     msgEl.style.color = 'var(--negative)'; msgEl.textContent = d.detail || '修改失败';
   }
+}
+
+function downloadMemoryBackup() {
+  document.getElementById('memory-backup-status').textContent = '开始下载…';
+  // Navigation download allows iOS Safari to handle ZIP as a normal download.
+  window.location.href = BASE + '/api/backup/export';
+}
+
+async function loadMemoryBackupStatus() {
+  const element = document.getElementById('memory-restore-status');
+  try {
+    const response = await authFetch(BASE + '/api/backup/status', {credentials:'include'});
+    if (!response || !response.ok) return;
+    const info = await response.json();
+    if (info.pending) {
+      element.textContent = '已验证并暂存备份。请在 Zeabur 重启 Nocturne 服务，恢复将在下次启动时应用。';
+      element.style.color = 'var(--warning)';
+    } else if (info.previous_available) {
+      element.textContent = '暂无待恢复备份。已保留上次恢复之前的数据副本。';
+      element.style.color = 'var(--mute)';
+    } else {
+      element.textContent = '';
+    }
+  } catch (e) { element.textContent = '无法读取恢复状态'; }
+}
+
+async function stageMemoryRestore() {
+  const input = document.getElementById('memory-restore-file');
+  const status = document.getElementById('memory-restore-status');
+  const button = document.getElementById('memory-restore-btn');
+  if (!input.files || !input.files[0]) { status.textContent = '请先选择 ZIP 文件'; return; }
+  if (!confirm('确认准备完整恢复吗？下次服务重启会替换现有记忆。建议先下载当前备份。')) return;
+  const form = new FormData();
+  form.append('file', input.files[0]);
+  form.append('confirm', 'RESTORE');
+  button.disabled = true;
+  status.textContent = '正在上传和验证备份…';
+  try {
+    const response = await authFetch(BASE + '/api/backup/restore', {
+      method:'POST', credentials:'include', headers:{'X-Nocturne-Restore':'yes'}, body:form
+    });
+    if (!response) return;
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || '验证失败');
+    status.style.color = 'var(--positive)';
+    status.textContent = `备份验证成功（${result.files} 个文件）。请在 Zeabur 重启 Nocturne 服务以应用；重启前原数据不变。`;
+    input.value = '';
+  } catch (e) {
+    status.style.color = 'var(--negative)';
+    status.textContent = '未恢复：' + e.message;
+  } finally { button.disabled = false; }
 }
 
 async function loadSettingsStatus() {
@@ -7166,7 +7232,7 @@ function switchChapter(target, options = {}) {
   if (target === 'config') loadConfig();
   if (target === 'reverie') loadReverie();
   if (target === 'import') { pollImportStatus(); loadImportResults(); }
-  if (target === 'settings') loadSettingsStatus();
+  if (target === 'settings') { loadSettingsStatus(); loadMemoryBackupStatus(); }
   if (target === 'desire') loadDesire();
   if (target === 'echoes') loadEchoes();
   if (target === 'nearfield') setNearfieldMode(nearfieldMode);

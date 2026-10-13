@@ -80,6 +80,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mcp.server.fastmcp import FastMCP
 
 from bucket_manager import BucketManager
+from backup_restore import (BackupError, export_backup, stage_backup,
+                            apply_pending_restore, restore_status, MAX_ARCHIVE_SIZE)
 from dehydrator import Dehydrator
 from decay_engine import DecayEngine
 from embedding_engine import EmbeddingEngine
@@ -159,6 +161,9 @@ from memory_residue_engine import (
 config = load_config()
 setup_logging(config.get("log_level", "INFO"))
 logger = logging.getLogger("ombre_brain")
+# Recover staged backups before opening any SQLite connections.
+if apply_pending_restore(config["buckets_dir"]):
+    logger.warning("Nocturne memory backup restored at startup")
 
 # --- Runtime env vars (port + webhook) / 运行时环境变量 ---
 # OMBRE_PORT: HTTP/SSE 监听端口，默认 8000
@@ -3944,6 +3949,88 @@ def _require_auth(request):
 
 
 # --- Auth endpoints ---
+# =============================================================
+# Private full-data backup (distinct from conversation-history import)
+# =============================================================
+@mcp.custom_route("/api/backup/status", methods=["GET"])
+async def api_backup_status(request):
+    from starlette.responses import JSONResponse
+    err = _require_auth(request)
+    if err:
+        return err
+    return JSONResponse({"ok": True, **restore_status(config["buckets_dir"])})
+
+
+@mcp.custom_route("/api/backup/export", methods=["GET"])
+async def api_backup_export(request):
+    from starlette.responses import FileResponse, JSONResponse
+    from starlette.background import BackgroundTask
+    err = _require_auth(request)
+    if err:
+        return err
+    import tempfile as _tempfile
+    import asyncio as _asyncio
+    import os as _os
+    fd, target = _tempfile.mkstemp(prefix="nocturne-backup-", suffix=".zip")
+    _os.close(fd)
+    try:
+        await _asyncio.to_thread(export_backup, config["buckets_dir"], target)
+    except Exception:
+        Path(target).unlink(missing_ok=True)
+        logger.exception("Backup export failed")
+        return JSONResponse({"error": "备份导出失败，请查看服务日志"}, status_code=500)
+    filename = "nocturne-backup-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".zip"
+    return FileResponse(target, media_type="application/zip", filename=filename,
+                        background=BackgroundTask(lambda: Path(target).unlink(missing_ok=True)))
+
+
+@mcp.custom_route("/api/backup/restore", methods=["POST"])
+async def api_backup_restore(request):
+    """Validate and stage an archive; requires a separate service restart."""
+    from starlette.responses import JSONResponse
+    import tempfile as _tempfile
+    import asyncio as _asyncio
+    import os as _os
+    err = _require_auth(request)
+    if err:
+        return err
+    # Reject simple cross-site form submissions; upload is a destructive action
+    # whose actual installation will happen on the next service restart.
+    if request.headers.get("x-nocturne-restore") != "yes":
+        return JSONResponse({"error": "Missing restore confirmation header"}, status_code=403)
+    from urllib.parse import urlsplit as _urlsplit
+    origin = request.headers.get("origin")
+    if origin and _urlsplit(origin).netloc.lower() != request.headers.get("host", "").lower():
+        return JSONResponse({"error": "Cross-origin restore is not allowed"}, status_code=403)
+    try:
+        form = await request.form()
+        upload = form.get("file")
+        if form.get("confirm") != "RESTORE" or upload is None or not hasattr(upload, "read"):
+            return JSONResponse({"error": "需要选择备份 ZIP 并确认恢复"}, status_code=400)
+        with _tempfile.NamedTemporaryFile(prefix="nocturne-upload-", suffix=".zip", delete=False) as tmp:
+            path = tmp.name
+            size = 0
+            try:
+                while chunk := await upload.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > MAX_ARCHIVE_SIZE:
+                        raise BackupError("Backup ZIP exceeds size limit")
+                    tmp.write(chunk)
+            except Exception:
+                _os.unlink(path)
+                raise
+        try:
+            details = await _asyncio.to_thread(stage_backup, config["buckets_dir"], path)
+        finally:
+            _os.unlink(path)
+        return JSONResponse({"ok": True, "pending_restart": True, **details})
+    except BackupError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception:
+        logger.exception("Backup staging failed")
+        return JSONResponse({"error": "备份上传失败，请查看服务日志"}, status_code=500)
+
+
 @mcp.custom_route("/auth/status", methods=["GET"])
 async def auth_status(request):
     """Return auth state (authenticated, setup_needed)."""
